@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import { DayButton, DayPicker, getDefaultClassNames } from 'react-day-picker'
 
-import { cn } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
 import { Button, buttonVariants } from '@/components/ui/button'
 
 function Calendar({
@@ -136,15 +136,24 @@ function Calendar({
           )
         },
         Chevron: ({ className, orientation, ...props }) => {
+          // Purely decorative: the accessible name for the nav buttons these
+          // render inside comes from react-day-picker's own default labels
+          // (e.g. "Go to the Previous Month"), so the icon itself must not be
+          // exposed to assistive tech a second time.
           if (orientation === 'left') {
             return (
-              <ChevronLeftIcon className={cn('size-4', className)} {...props} />
+              <ChevronLeftIcon
+                aria-hidden="true"
+                className={cn('size-4', className)}
+                {...props}
+              />
             )
           }
 
           if (orientation === 'right') {
             return (
               <ChevronRightIcon
+                aria-hidden="true"
                 className={cn('size-4', className)}
                 {...props}
               />
@@ -152,7 +161,11 @@ function Calendar({
           }
 
           return (
-            <ChevronDownIcon className={cn('size-4', className)} {...props} />
+            <ChevronDownIcon
+              aria-hidden="true"
+              className={cn('size-4', className)}
+              {...props}
+            />
           )
         },
         DayButton: CalendarDayButton,
@@ -190,7 +203,7 @@ function CalendarDayButton({
       ref={ref}
       variant="ghost"
       size="icon"
-      data-day={day.date.toLocaleDateString()}
+      data-day={formatDate(day.date, 'default')}
       data-selected-single={
         modifiers.selected &&
         !modifiers.range_start &&

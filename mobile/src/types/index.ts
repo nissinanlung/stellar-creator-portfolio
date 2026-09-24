@@ -16,6 +16,10 @@ export type RootStackParamList = {
   BiometricAuth: undefined;
   StreamHost: { roomId: string; signalingServerUrl?: string };
   StreamViewer: { roomId: string; creatorName?: string; signalingServerUrl?: string };
+  NotificationSettings: undefined;
+  BountyDetail: { bountyId: string };
+  EmailVerification: { token?: string };
+  PaymentComplete: { paymentId?: string; status?: string };
 };
 
 export type MainTabParamList = {
@@ -25,6 +29,46 @@ export type MainTabParamList = {
   Profile: undefined;
   Settings: undefined;
 };
+
+// ─── Home Screen ──────────────────────────────────────────────────────────────
+
+export interface PortfolioSummary {
+  id: string;
+  title: string;
+  subtitle: string;
+  creator: string;
+  value: string;
+  followers: number;
+  change: number;
+  tags: string[];
+}
+
+export interface MetricCard {
+  id: string;
+  label: string;
+  value: number;
+  previousValue: number;
+  unit: string;
+  trend: 'up' | 'down' | 'flat';
+  trendPct: number;
+}
+
+export interface ProjectBountyItem {
+  id: string;
+  kind: 'project' | 'bounty';
+  title: string;
+  subtitle: string;
+  reward: string;
+  due: string;
+  status: string;
+  tags: string[];
+}
+
+export interface HomeData {
+  trendingPortfolios: PortfolioSummary[];
+  quickMetrics: MetricCard[];
+  projectBountyItems: ProjectBountyItem[];
+}
 
 // ─── Canvas / Collaboration ───────────────────────────────────────────────────
 
@@ -89,6 +133,25 @@ export interface SessionRecord {
   lastUsed: number;
 }
 
+// ─── Sealed Sender ────────────────────────────────────────────────────────────
+
+export interface SealedSenderMessage {
+  id: string;
+  envelope: Uint8Array;
+  signature: Uint8Array;
+  messageType: 1 | 3;
+  timestamp: number;
+}
+
+// ─── Delivery Receipts ───────────────────────────────────────────────────────
+
+export interface DeliveryReceipt {
+  messageId: string;
+  recipientId: string;
+  status: 'delivered' | 'read';
+  timestamp: number;
+}
+
 // ─── Upscaling ────────────────────────────────────────────────────────────────
 
 export interface UpscaleOptions {
@@ -144,4 +207,53 @@ export interface FocusSession {
   phase: 'focus' | 'short-break' | 'long-break';
   durationSeconds: number;
   completedAt: string; // ISO 8601
+}
+
+// ─── Offline / Network ────────────────────────────────────────────────────────
+
+export type NetworkState = 'unknown' | 'online' | 'offline';
+export type SyncStatus = 'synced' | 'syncing' | 'error';
+
+export interface QueuedOperation {
+  id: string;
+  type: 'create' | 'update' | 'delete';
+  endpoint: string;
+  payload?: Record<string, unknown>;
+  retries: number;
+  createdAt: string;
+  /** Epoch ms — op is not retried until Date.now() >= nextRetryAt */
+  nextRetryAt: number;
+}
+
+// ─── Multi-Sig Approval ───────────────────────────────────────────────────────
+
+export type MultiSigSignerStatus = 'pending' | 'approved';
+
+export interface MultiSigSigner {
+  id: string;
+  name: string;
+  role: 'Initiator' | 'Approver';
+  status: MultiSigSignerStatus;
+}
+
+export interface MultiSigTask {
+  id: string;
+  title: string;
+  amount: string;
+  description: string;
+  status: 'pending' | 'approved';
+  signers: MultiSigSigner[];
+  /** Signer IDs currently mid-way through a biometric confirmation prompt. */
+  queuedApprovals: string[];
+}
+
+export interface MultiSigState {
+  tasks: MultiSigTask[];
+  /**
+   * Prompts `signerId` for a real biometric confirmation and only flips
+   * their status to 'approved' on success. Throws if the confirmation
+   * fails or is cancelled — callers must not assume approval succeeded.
+   */
+  queueApproval: (taskId: string, signerId: string) => Promise<void>;
+  approveSigner: (taskId: string, signerId: string) => void;
 }

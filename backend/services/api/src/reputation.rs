@@ -87,6 +87,31 @@ lazy_static::lazy_static! {
     ]));
 }
 
+// ---------------------------------------------------------------------------
+// Poison-safe lock helpers
+//
+// A Mutex becomes "poisoned" when a thread panics while holding its guard.
+// `.lock().unwrap()` re-panics every subsequent caller, taking the entire
+// review/reputation read path down for the lifetime of the process.
+//
+// `.unwrap_or_else(|e| e.into_inner())` recovers the guarded data instead.
+// The inner value is still coherent — the only thing that went wrong is that
+// one previous write was interrupted. All subsequent callers continue to work,
+// and any partial state is detectable through normal validation.
+// ---------------------------------------------------------------------------
+
+/// Acquire the `REVIEW_CACHE` lock, recovering from a prior panic if needed.
+fn lock_review_cache(
+    cache: &Mutex<Vec<Review>>,
+) -> std::sync::MutexGuard<'_, Vec<Review>> {
+    cache.lock().unwrap_or_else(|poisoned| {
+        // Log at warn level so operations teams can see the event, then hand
+        // back the coherent inner data so callers keep working.
+        eprintln!("WARN: REVIEW_CACHE was poisoned — recovering inner data");
+        poisoned.into_inner()
+    })
+}
+
 /// Helper to format database errors consistently
 fn format_db_error(err: SqlxError) -> String {
     match err {
@@ -98,7 +123,7 @@ fn format_db_error(err: SqlxError) -> String {
 
 /// Get all reviews (development/testing function)
 pub fn get_mock_reviews() -> Vec<Review> {
-    REVIEW_CACHE.lock().unwrap().clone()
+    lock_review_cache(&REVIEW_CACHE).clone()
 }
 
 /// Get reviews for a specific creator address
@@ -111,17 +136,17 @@ pub async fn reviews_for_creator(creator_address: &str, pool: Option<&PgPool>) -
             ORDER BY created_at DESC
         "#;
 
-        sqlx::query_as::<_, (u64, String, String, Option<u64>, i16, String, bool, chrono::DateTime<chrono::Utc>)>(query)
+        sqlx::query_as::<_, (i64, String, String, Option<i64>, i16, String, bool, chrono::DateTime<chrono::Utc>)>(query)
             .bind(creator_address)
             .fetch_all(pg_pool)
             .await
             .map(|rows| {
                 rows.into_iter()
                     .map(|(id, creator_addr, reviewer_addr, bounty_id, rating, comment, verified, created_at)| Review {
-                        id,
+                        id: id as u64,
                         creator_address: creator_addr,
                         reviewer_address: reviewer_addr,
-                        bounty_id,
+                        bounty_id: bounty_id.map(|id| id as u64),
                         rating: rating as u8,
                         comment,
                         verified,
@@ -131,9 +156,7 @@ pub async fn reviews_for_creator(creator_address: &str, pool: Option<&PgPool>) -
             })
             .map_err(format_db_error)
     } else {
-        Ok(REVIEW_CACHE
-            .lock()
-            .unwrap()
+        Ok(lock_review_cache(&REVIEW_CACHE)
             .iter()
             .filter(|r| r.creator_address == creator_address)
             .cloned()
@@ -178,17 +201,17 @@ pub async fn recent_reviews(limit: u32, pool: Option<&PgPool>) -> Result<Vec<Rev
             LIMIT $1
         "#;
 
-        sqlx::query_as::<_, (u64, String, String, Option<u64>, i16, String, bool, chrono::DateTime<chrono::Utc>)>(query)
+        sqlx::query_as::<_, (i64, String, String, Option<i64>, i16, String, bool, chrono::DateTime<chrono::Utc>)>(query)
             .bind(limit as i64)
             .fetch_all(pg_pool)
             .await
             .map(|rows| {
                 rows.into_iter()
                     .map(|(id, creator_addr, reviewer_addr, bounty_id, rating, comment, verified, created_at)| Review {
-                        id,
+                        id: id as u64,
                         creator_address: creator_addr,
                         reviewer_address: reviewer_addr,
-                        bounty_id,
+                        bounty_id: bounty_id.map(|id| id as u64),
                         rating: rating as u8,
                         comment,
                         verified,
@@ -198,7 +221,7 @@ pub async fn recent_reviews(limit: u32, pool: Option<&PgPool>) -> Result<Vec<Rev
             })
             .map_err(format_db_error)
     } else {
-        let mut reviews = REVIEW_CACHE.lock().unwrap().clone();
+        let mut reviews = lock_review_cache(&REVIEW_CACHE).clone();
         reviews.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         reviews.truncate(limit as usize);
         Ok(reviews)
@@ -225,7 +248,7 @@ pub async fn submit_review(submission: ReviewSubmission, pool: Option<&PgPool>) 
             RETURNING id, creator_address, reviewer_address, bounty_id, rating, comment, verified, created_at
         "#;
 
-        sqlx::query_as::<_, (u64, String, String, Option<u64>, i16, String, bool, chrono::DateTime<chrono::Utc>)>(query)
+        sqlx::query_as::<_, (i64, String, String, Option<i64>, i16, String, bool, chrono::DateTime<chrono::Utc>)>(query)
             .bind(new_review.id as i64)
             .bind(&new_review.creator_address)
             .bind(&new_review.reviewer_address)
@@ -237,7 +260,7 @@ pub async fn submit_review(submission: ReviewSubmission, pool: Option<&PgPool>) 
             .fetch_one(pg_pool)
             .await
             .map(|(id, creator_addr, reviewer_addr, bounty_id, rating, comment, verified, created_at)| Review {
-                id,
+                id: id as u64,
                 creator_address: creator_addr,
                 reviewer_address: reviewer_addr,
                 bounty_id: bounty_id.map(|id| id as u64),
@@ -248,7 +271,7 @@ pub async fn submit_review(submission: ReviewSubmission, pool: Option<&PgPool>) 
             })
             .map_err(format_db_error)
     } else {
-        REVIEW_CACHE.lock().unwrap().push(new_review.clone());
+        lock_review_cache(&REVIEW_CACHE).push(new_review.clone());
         Ok(new_review)
     }
 }
@@ -389,6 +412,16 @@ lazy_static::lazy_static! {
         Arc::new(Mutex::new(CacheMap::new()));
 }
 
+/// Acquire the `REPUTATION_CACHE` lock, recovering from a prior panic if needed.
+fn lock_reputation_cache(
+    cache: &Mutex<CacheMap<String, (EffectiveReputation, Instant)>>,
+) -> std::sync::MutexGuard<'_, CacheMap<String, (EffectiveReputation, Instant)>> {
+    cache.lock().unwrap_or_else(|poisoned| {
+        eprintln!("WARN: REPUTATION_CACHE was poisoned — recovering inner data");
+        poisoned.into_inner()
+    })
+}
+
 /// Derive a 0–100 on-chain base score from the existing review aggregation.
 ///
 /// In production this would call the Stellar RPC to read the `stellar_insights`
@@ -417,7 +450,7 @@ pub async fn fetch_reputation_with_cache(
 ) -> Result<EffectiveReputation, String> {
     // Check cache first.
     {
-        let cache = REPUTATION_CACHE.lock().unwrap();
+        let cache = lock_reputation_cache(&REPUTATION_CACHE);
         if let Some((cached, stored_at)) = cache.get(creator_address) {
             let elapsed = stored_at.elapsed().as_secs();
             if elapsed < CACHE_TTL_SECS {
@@ -442,7 +475,7 @@ pub async fn fetch_reputation_with_cache(
 
     REPUTATION_CACHE
         .lock()
-        .unwrap()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(creator_address.to_string(), (result.clone(), Instant::now()));
 
     Ok(result)
@@ -451,7 +484,166 @@ pub async fn fetch_reputation_with_cache(
 /// Remove a creator's cache entry so the next request forces a fresh RPC read.
 /// Call this whenever a new completed bounty or review is recorded.
 pub fn invalidate_reputation_cache(creator_address: &str) {
-    REPUTATION_CACHE.lock().unwrap().remove(creator_address);
+    lock_reputation_cache(&REPUTATION_CACHE).remove(creator_address);
+}
+
+// ---------------------------------------------------------------------------
+// Filtered / sorted / paginated review listing (admin + "all reviews" feeds)
+//
+// TODO: this whole section is a stub. `parse_review_filters` ignores its
+// query params and `fetch_all_reviews_from_db` / `get_filtered_creator_reviews_from_db`
+// return in-memory mock data instead of querying Postgres. Sorting,
+// filtering-by-shape and pagination themselves are real, working
+// implementations — only the two DB-facing functions and query-param parsing
+// need to be wired up before this is production-ready.
+// ---------------------------------------------------------------------------
+
+lazy_static::lazy_static! {
+    /// Stashed by `set_database_pool`/`initialize_reputation_system_with_db`
+    /// for the stub DB-facing functions below to use once they're wired up
+    /// to real queries. Not read by anything yet.
+    static ref DB_POOL: Mutex<Option<PgPool>> = Mutex::new(None);
+}
+
+/// Stash the connection pool for later use by the (currently stubbed)
+/// DB-facing functions in this section.
+pub fn set_database_pool(pool: PgPool) {
+    *DB_POOL.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(pool);
+}
+
+/// One-time startup hook. Currently just stores the pool — see the TODO on
+/// this section for what's still missing.
+pub fn initialize_reputation_system_with_db(pool: PgPool) {
+    set_database_pool(pool);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewSortBy {
+    CreatedAt,
+    Rating,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SortOrder {
+    Asc,
+    Desc,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReviewFilters {
+    pub sort_by: Option<ReviewSortBy>,
+    pub sort_order: Option<SortOrder>,
+    pub page: Option<u32>,
+    pub limit: Option<u32>,
+}
+
+/// TODO: stub — always returns the default (unfiltered, page 1) filter set,
+/// regardless of what's in `query`. Wire up real query-param parsing
+/// (rating range, verified-only, date range, sortBy/sortOrder/page/limit)
+/// here; return `Err(messages)` for invalid values the way the rest of this
+/// file's validation does.
+pub fn parse_review_filters(
+    _query: &HashMap<String, String>,
+) -> Result<ReviewFilters, Vec<String>> {
+    Ok(ReviewFilters::default())
+}
+
+/// TODO: stub — returns the in-memory seed reviews rather than querying
+/// Postgres. Swap for a real `SELECT * FROM reviews` once this endpoint
+/// needs to reflect real data.
+pub async fn fetch_all_reviews_from_db() -> Vec<Review> {
+    get_mock_reviews()
+}
+
+/// TODO: stub — every review currently passes through unfiltered.
+pub fn filter_reviews(reviews: &[Review], _filters: &ReviewFilters) -> Vec<Review> {
+    reviews.to_vec()
+}
+
+pub fn sort_reviews(reviews: &mut [Review], sort_by: &ReviewSortBy, sort_order: &SortOrder) {
+    reviews.sort_by(|a, b| {
+        let ordering = match sort_by {
+            ReviewSortBy::CreatedAt => a.created_at.cmp(&b.created_at),
+            ReviewSortBy::Rating => a.rating.cmp(&b.rating),
+        };
+        match sort_order {
+            SortOrder::Asc => ordering,
+            SortOrder::Desc => ordering.reverse(),
+        }
+    });
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PaginatedReviews {
+    pub reviews: Vec<Review>,
+    pub total_count: u32,
+    pub page: u32,
+    pub limit: u32,
+}
+
+pub fn paginate_reviews(reviews: Vec<Review>, page: u32, limit: u32) -> PaginatedReviews {
+    let total_count = reviews.len() as u32;
+    let start = ((page.max(1) - 1) * limit) as usize;
+    let page_reviews = reviews.into_iter().skip(start).take(limit as usize).collect();
+    PaginatedReviews {
+        reviews: page_reviews,
+        total_count,
+        page,
+        limit,
+    }
+}
+
+/// Sync aggregation over an already-fetched review list — distinct from
+/// `aggregate_reviews` above, which fetches by creator address from the DB.
+/// Used by the "all reviews" / filtered listing endpoints.
+pub fn aggregate_review_list(reviews: &[Review]) -> ReviewAggregation {
+    let total_reviews = reviews.len() as u32;
+    let average_rating = if total_reviews > 0 {
+        reviews.iter().map(|r| r.rating as f64).sum::<f64>() / total_reviews as f64
+    } else {
+        0.0
+    };
+    let mut star_counts = HashMap::new();
+    for rating in 1..=5u8 {
+        star_counts.insert(rating, reviews.iter().filter(|r| r.rating == rating).count() as u32);
+    }
+    ReviewAggregation {
+        creator_address: String::new(),
+        total_reviews,
+        average_rating,
+        star_counts,
+        recent_reviews: reviews.iter().take(3).cloned().collect(),
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FilteredCreatorReputationPayload {
+    pub creator_address: String,
+    pub reviews: PaginatedReviews,
+    pub aggregation: ReviewAggregation,
+}
+
+/// TODO: stub — filters everything from the in-memory seed list by creator
+/// address only; `filters` beyond page/limit are ignored. See the section
+/// TODO above.
+pub async fn get_filtered_creator_reviews_from_db(
+    creator_address: &str,
+    filters: &ReviewFilters,
+) -> FilteredCreatorReputationPayload {
+    let reviews: Vec<Review> = get_mock_reviews()
+        .into_iter()
+        .filter(|r| r.creator_address == creator_address)
+        .collect();
+    let aggregation = aggregate_review_list(&reviews);
+    let page = filters.page.unwrap_or(1).max(1);
+    let limit = filters.limit.unwrap_or(10).clamp(1, 100);
+    FilteredCreatorReputationPayload {
+        creator_address: creator_address.to_string(),
+        reviews: paginate_reviews(reviews, page, limit),
+        aggregation,
+    }
 }
 
 #[cfg(test)]
@@ -545,5 +737,116 @@ mod tests {
         assert!(second.cache_ttl_seconds <= CACHE_TTL_SECS);
         // Clean up.
         invalidate_reputation_cache(addr);
+    }
+
+    // -------------------------------------------------------------------------
+    // Poison-recovery tests
+    //
+    // We use *local* Mutex instances so that a poisoning event in one test
+    // cannot bleed into shared global state and destabilise other tests.
+    // The helpers (`lock_review_cache` / `lock_reputation_cache`) are called
+    // directly with the local mutex so the same code paths exercised in
+    // production are tested here.
+    // -------------------------------------------------------------------------
+
+    /// Poison a `Vec<Review>` mutex mid-write and confirm reads still succeed.
+    ///
+    /// Strategy:
+    ///   1. Spawn a thread that acquires the lock, pushes a review, then
+    ///      panics — leaving the mutex poisoned.
+    ///   2. Join the thread (its panic is caught by `join()`).
+    ///   3. Call `lock_review_cache` on the poisoned mutex — it must *not*
+    ///      panic, and must return the data with the partial write included
+    ///      (the push completed before the panic).
+    #[test]
+    fn review_cache_survives_panic_mid_write() {
+        use std::sync::{Arc, Mutex};
+
+        let cache: Arc<Mutex<Vec<Review>>> = Arc::new(Mutex::new(vec![]));
+        let cache_clone = Arc::clone(&cache);
+
+        let poisoning_review = Review {
+            id: 9999,
+            creator_address: "PANIC_CREATOR".to_string(),
+            reviewer_address: "PANIC_REVIEWER".to_string(),
+            bounty_id: None,
+            rating: 5,
+            comment: "Written before the panic".to_string(),
+            verified: false,
+            created_at: chrono::Utc::now(),
+        };
+        let expected_id = poisoning_review.id;
+
+        // Spawn a thread that pushes the review then panics, poisoning the mutex.
+        let handle = std::thread::spawn(move || {
+            let mut guard = cache_clone.lock().unwrap();
+            guard.push(poisoning_review);
+            // The push completed; now simulate a panic (e.g. a downstream
+            // invariant check fails, an index is out of bounds, etc.).
+            panic!("simulated mid-write panic");
+        });
+
+        // The spawned thread panicked — join() captures that as an Err.
+        assert!(
+            handle.join().is_err(),
+            "thread should have panicked"
+        );
+
+        // The mutex is now poisoned.  lock_review_cache must recover it
+        // instead of propagating the panic.
+        let guard = lock_review_cache(&cache);
+        assert!(
+            !guard.is_empty(),
+            "cache should contain the review that was pushed before the panic"
+        );
+        assert_eq!(
+            guard[0].id, expected_id,
+            "recovered data should include the review written before the panic"
+        );
+    }
+
+    /// Poison a reputation `CacheMap` mutex mid-write and confirm reads still succeed.
+    #[test]
+    fn reputation_cache_survives_panic_mid_write() {
+        use std::sync::{Arc, Mutex};
+        use std::time::Instant;
+
+        let cache: Arc<Mutex<CacheMap<String, (EffectiveReputation, Instant)>>> =
+            Arc::new(Mutex::new(CacheMap::new()));
+        let cache_clone = Arc::clone(&cache);
+
+        let entry_key = "PANIC_ADDR".to_string();
+        let entry_key_check = entry_key.clone();
+
+        let signals = OffChainSignals {
+            response_rate: 1.0,
+            kyc_level: KycLevel::None,
+            profile_completeness: 1.0,
+            days_since_last_activity: 0,
+        };
+        let breakdown = compute_effective_score(80.0, &signals);
+        let reputation = EffectiveReputation {
+            creator_address: entry_key.clone(),
+            breakdown,
+            cached_at: chrono::Utc::now(),
+            cache_ttl_seconds: CACHE_TTL_SECS,
+            on_chain_verified: false,
+        };
+
+        // Insert the entry then panic — poisoning the mutex after the insert.
+        let handle = std::thread::spawn(move || {
+            let mut guard = cache_clone.lock().unwrap();
+            guard.insert(entry_key, (reputation, Instant::now()));
+            panic!("simulated mid-write panic after insert");
+        });
+
+        assert!(handle.join().is_err(), "thread should have panicked");
+
+        // lock_reputation_cache must recover the poisoned mutex.
+        let guard = lock_reputation_cache(&cache);
+        assert!(
+            guard.contains_key(&entry_key_check),
+            "reputation entry should be recoverable after cache was poisoned"
+        );
     }
 }

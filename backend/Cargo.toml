@@ -9,8 +9,14 @@ members = [
     "contracts/identity",
     "contracts/referral",
     "contracts/stellar_insights",
+    "contracts/insurance",
+    "contracts/test-utils",
     "services/api",
     "services/auth",
+    "services/common",
+    "services/discovery",
+    "services/indexer",
+    "services/notifications",
     "tests",
 ]
 resolver = "2"
@@ -25,34 +31,44 @@ repository = "https://github.com/stellar/stellar-platform"
 
 [workspace.dependencies]
 # Soroban SDK
-soroban-sdk = "21.7.7"
+soroban-sdk = "23.5.3"
 soroban-spec-tools = "21.5"
 
 # Web & HTTP
 actix-web = "4.4"
 actix-rt = "2.9"
-reqwest = { version = "0.13", features = ["json"] }
+reqwest = { version = "0.13.4", features = ["json"] }
 tokio = { version = "1.52", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Database
-sqlx = { version = "0.8", features = ["runtime-tokio-native-tls", "postgres"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-native-tls", "postgres", "uuid", "chrono"] }
 diesel = { version = "2.1", features = ["postgres"] }
 
 # Cryptography & Blockchain
 ed25519-dalek = "2.1"
-sha2 = "0.10"
+sha2 = "0.11"
 hmac = { version = "0.12", features = ["std"] }
 hex = "0.4"
+uuid = { version = "1", features = ["v4", "serde"] }
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+oauth2 = "4"
 
 # Auth
-jsonwebtoken = "10"
+# jsonwebtoken 10 ships with no crypto backend enabled by default — without
+# a feature choice, encode/decode panics at runtime ("Could not automatically
+# determine the process-level CryptoProvider"). `rust_crypto` matches the
+# pure-Rust crypto stack already used elsewhere in this workspace (ed25519-dalek,
+# hmac, sha2) rather than pulling in aws-lc-rs's C build dependency.
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 actix-web-httpauth = "0.8"
 
 # Utilities
+clap = { version = "4.6", features = ["derive"] }
 thiserror = "2.0"
-tracing = "0.1"
+tracing = "0.1.44"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1.0"
 futures = "0.3"
@@ -61,7 +77,14 @@ dotenvy = "0.15"
 # Testing
 tokio-test = "0.4"
 
+# OpenTelemetry (indexer service)
+opentelemetry = "0.22"
+opentelemetry_sdk = { version = "0.22", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.15", features = ["grpc-tonic"] }
+tracing-opentelemetry = "0.23"
+
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
+overflow-checks = true

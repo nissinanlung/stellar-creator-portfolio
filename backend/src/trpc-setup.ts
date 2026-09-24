@@ -3,20 +3,29 @@
  * 
  * Provides type-safe procedures with automatic context injection,
  * authentication middleware, and distributed tracing integration.
+ *
+ * Circuit breaker:
+ *   A `circuitBreakerMiddleware` is applied to all procedures.  When the
+ *   Stellar RPC circuit is OPEN, procedures that call the Stellar client will
+ *   surface a `CircuitOpenError` which is caught here and converted to a
+ *   tRPC `SERVICE_UNAVAILABLE` error (HTTP 503) with a `Retry-After: 30`
+ *   header so clients know exactly when to retry.
  */
 
 import { TRPCError, initTRPC } from '@trpc/server';
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { ZodError } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { tracingMiddleware } from '@/backend/services/tracing';
+import { CircuitOpenError } from '@/services/api/stellar/client';
 import jwt from 'jsonwebtoken';
 
 // ─── Context Creation ─────────────────────────────────────────────────────────
 
 interface User {
   id: string;
-  email: string;
-  name: string;
+  email: string | null;
+  name: string | null;
 }
 
 interface Context {
@@ -37,7 +46,7 @@ export async function createContext(req: NextRequest): Promise<Context> {
     const token = authorization.slice(7);
     try {
       const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-key';
-      const decoded = jwt.verify(token, JWT_SECRET) as any;
+      const decoded = jwt.verify(token, JWT_SECRET) as jwt.JwtPayload & { userId: string };
       
       // Fetch user from database
       const dbUser = await prisma.user.findUnique({
@@ -69,8 +78,8 @@ const t = initTRPC.context<Context>().create({
     ...shape,
     data: {
       ...shape.data,
-      zodError: 
-        error.cause instanceof Error && error.cause.name === 'ZodError'
+      zodError:
+        error.cause instanceof ZodError
           ? error.cause.flatten()
           : null,
     },
@@ -79,13 +88,18 @@ const t = initTRPC.context<Context>().create({
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
+// tracingMiddleware's `next` param is typed generically (() => Promise<unknown>)
+// so it can be shared across frameworks, but its implementation always
+// resolves to exactly whatever `next()` itself resolved to - it never
+// transforms the result. That means casting through `next`'s own real
+// return type here reflects actual runtime behavior, not a false claim.
 const tracingMw = t.middleware(({ next, path, type, ctx }) => {
   return tracingMiddleware({
     ctx: { headers: ctx.headers },
-    next,
+    next: next as unknown as () => Promise<unknown>,
     path,
     type,
-  });
+  }) as ReturnType<typeof next>;
 });
 
 const authMiddleware = t.middleware(({ ctx, next }) => {
@@ -103,8 +117,51 @@ const authMiddleware = t.middleware(({ ctx, next }) => {
   });
 });
 
+/**
+ * Circuit breaker middleware.
+ *
+ * Catches `CircuitOpenError` thrown by any Stellar RPC call inside a procedure
+ * and converts it into a tRPC `SERVICE_UNAVAILABLE` (HTTP 503).
+ *
+ * The `Retry-After: 30` header is injected into the response headers so HTTP
+ * clients and proxies know the exact back-off window.  tRPC itself doesn't
+ * expose a first-class header API in middleware, so we attach it to the raw
+ * Next.js response via `ctx.req` when available.
+ */
+const circuitBreakerMw = t.middleware(async ({ ctx, next }) => {
+  try {
+    return await next();
+  } catch (err) {
+    if (err instanceof CircuitOpenError) {
+      // Attach Retry-After to the underlying Next.js response when we can
+      // reach it (tRPC Next.js adapter exposes the response object via context
+      // in some configurations; we guard with a type-safe check).
+      const res = (ctx as Context & { res?: NextResponse }).res;
+      if (res && typeof res.headers?.set === 'function') {
+        res.headers.set('Retry-After', String(err.retryAfterSeconds));
+      }
+
+      throw new TRPCError({
+        code: 'SERVICE_UNAVAILABLE',
+        message: err.message,
+        cause: err,
+      });
+    }
+    throw err;
+  }
+});
+
 // ─── Base Procedures ──────────────────────────────────────────────────────────
 
 export const router = t.router;
-export const publicProcedure = t.procedure.use(tracingMw);
-export const protectedProcedure = t.procedure.use(tracingMw).use(authMiddleware);
+
+// Every public procedure: tracing → circuit breaker
+export const publicProcedure = t.procedure
+  .use(tracingMw)
+  .use(circuitBreakerMw);
+
+// Every protected procedure: tracing → circuit breaker → auth
+export const protectedProcedure = t.procedure
+  .use(tracingMw)
+  .use(circuitBreakerMw)
+  .use(authMiddleware);

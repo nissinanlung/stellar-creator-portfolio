@@ -28,6 +28,39 @@ To activate the branch protection rules in GitHub:
 3. **Save Changes**
    - Click **Create** or **Update** to apply the rule
 
+## Required Status Checks
+
+The following CI jobs **must** be added as required status checks in
+**Settings → Branches → Branch protection rules → `main` → Require status checks
+to pass before merging**. A job _existing_ in a workflow file is not enough —
+GitHub only blocks merges on checks that are explicitly listed here.
+
+| Status check name | Source workflow | What it enforces |
+|---|---|---|
+| `CodeQL Results Check` | `.github/workflows/codeql.yml` (`check-results` job) | No high/critical CodeQL alerts in the PR diff |
+
+### Enabling "CodeQL Results Check"
+
+The `check-results` job in `.github/workflows/codeql.yml` queries the Code
+Scanning API and fails if any **high** or **critical** severity CodeQL alert is
+open against the PR's head SHA. Without registering it as a required status
+check, the job can fail red on every PR indefinitely without ever blocking a
+merge, giving a false impression that high-severity findings are gated.
+
+Steps to wire it in:
+
+1. Open **Settings → Branches → Branch protection rules** and edit (or create)
+   the rule for `main`.
+2. Enable **"Require status checks to pass before merging"**.
+3. In the search box, type **`CodeQL Results Check`** and select it from the
+   dropdown (it will appear after the workflow has run at least once).
+4. Save the rule.
+
+> **Note:** The `check-results` job only runs on `pull_request` events, so it
+> will not appear in the dropdown until a PR has been opened after the workflow
+> was added. Run a test PR against `main` to register the check name if the
+> dropdown is empty.
+
 ## Protected Paths & Owners
 
 The following critical paths require review from @yosemite01 (or designees as the team grows):

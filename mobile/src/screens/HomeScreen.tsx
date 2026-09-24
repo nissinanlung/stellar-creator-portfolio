@@ -11,24 +11,23 @@ import {
   View,
 } from "react-native";
 import * as Haptics from "expo-haptics";
-import { useNavigation } from "@react-navigation/native";
 import { useRouter } from "expo-router";
 import { useTheme } from "../theme/ThemeProvider";
+import { useI18n } from "../i18n/I18nProvider";
 import { useOfflineData } from "../hooks/useOfflineData";
 import { useInfiniteScroll } from "../hooks/useInfiniteScroll";
 import {
   PortfolioSummary,
   ProjectBountyItem,
   HomeData,
-  RootStackParamList,
 } from "../types";
 import { ROUTES } from "../constants/routes";
 import { MetricCard } from "../components/dashboard/MetricCard";
 import { PortfolioCard } from "../components/home/PortfolioCard";
 import { ProjectBountyList } from "../components/home/ProjectBountyList";
 import { ActionButton } from "../components/buttons/ActionButton";
-import { FontSize, FontWeight, Radius, Shadow, Spacing } from "../theme/tokens";
-import { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { FontSize, FontWeight, Radius, Spacing } from "../theme/tokens";
+import { trigger } from "../haptics/HapticEngine";
 
 const buildHomeData = (): HomeData => ({
   trendingPortfolios: [
@@ -152,9 +151,8 @@ async function fetchHomeData(): Promise<HomeData> {
 
 export function HomeScreen() {
   const { colors, isDark } = useTheme();
+  const { t } = useI18n();
   const router = useRouter();
-  const navigation =
-    useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { data, isLoading, isStale, cachedAt, refetch } =
     useOfflineData<HomeData>("home-screen-data", fetchHomeData, {
       ttlMs: 5 * 60 * 1000,
@@ -175,7 +173,13 @@ export function HomeScreen() {
     () => router.push(ROUTES.APP.P2P),
     [router],
   );
-  
+
+  const handleNavigateToBiometric = useCallback(
+    () => router.push(ROUTES.APP.BIOMETRIC),
+    [router],
+  );
+
+
   // Infinite scroll for bounty items
   const bountyRef = useRef(null);
   const {
@@ -197,9 +201,13 @@ export function HomeScreen() {
   });
 
   const handleRefresh = useCallback(async () => {
+    void trigger("light");
     setRefreshing(true);
-    await refetch();
-    setRefreshing(false);
+    try {
+      await refetch();
+    } finally {
+      setRefreshing(false);
+    }
   }, [refetch]);
 
   const onPortfolioPress = useCallback((portfolio: PortfolioSummary) => {
@@ -219,12 +227,12 @@ export function HomeScreen() {
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>
-            Trending portfolios
+            {t("home.trendingTitle")}
           </Text>
           <Text
             style={[styles.sectionCaption, { color: colors.textSecondary }]}
           >
-            Selected from top user activity.
+            {t("home.trendingCaption")}
           </Text>
         </View>
         <FlatList
@@ -284,22 +292,21 @@ export function HomeScreen() {
         >
           <View>
             <Text style={[styles.title, { color: colors.text }]}>
-              Hello, Stellar Creator
+              {t("home.greeting")}
             </Text>
             <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-              Track trending portfolios, project demand, and secure your session
-              with biometric access.
+              {t("home.subtitle")}
             </Text>
           </View>
           <View style={styles.heroActions}>
             <ActionButton
-              title="Use Biometrics"
-              onPress={() => navigation.navigate("BiometricAuth")}
+              title={t("home.useBiometrics")}
+              onPress={handleNavigateToBiometric}
               variant="primary"
               accessibilityLabel="Open biometric authentication screen"
             />
             <ActionButton
-              title="Refresh"
+              title={t("home.refresh")}
               onPress={handleRefresh}
               variant="secondary"
               accessibilityLabel="Refresh home content"
@@ -307,21 +314,21 @@ export function HomeScreen() {
           </View>
           <View style={styles.featureActions}>
             <ActionButton
-              title="Audio"
+              title={t("home.audio")}
               onPress={handleNavigateToAudio}
               variant="secondary"
               style={styles.featureButton}
               accessibilityLabel="Open audio playback screen"
             />
             <ActionButton
-              title="Multi-Sig"
+              title={t("home.multiSig")}
               onPress={handleNavigateToMultiSig}
               variant="secondary"
               style={styles.featureButton}
               accessibilityLabel="Open multi-signature approval screen"
             />
             <ActionButton
-              title="Peer Transfer"
+              title={t("home.peerTransfer")}
               onPress={handleNavigateToP2P}
               variant="secondary"
               style={styles.featureButton}
@@ -341,7 +348,7 @@ export function HomeScreen() {
             ]}
           >
             <Text style={[styles.staleText, { color: colors.warning }]}>
-              Cached data from {cachedAt.toLocaleTimeString()}
+              {t("home.cachedData", { time: cachedAt.toLocaleTimeString() })}
             </Text>
           </View>
         )}
@@ -350,7 +357,7 @@ export function HomeScreen() {
           <View style={styles.loadingWrapper}>
             <ActivityIndicator color={colors.primary} size="large" />
             <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
-              Loading portfolio analytics…
+              {t("home.loadingAnalytics")}
             </Text>
           </View>
         ) : (
@@ -359,7 +366,7 @@ export function HomeScreen() {
             {trendingSection}
             <ProjectBountyList
               items={data?.projectBountyItems ?? []}
-              title="Project & Bounty feed"
+              title={t("home.projectBountyFeed")}
               onSelect={onItemSelect}
             />
           </>

@@ -14,6 +14,12 @@ interface SearchBarProps {
   showSuggestions?: boolean;
 }
 
+/**
+ * Debounced search input. Calls `onSearchChange` (if provided) `debounceMs`
+ * after the user stops typing, and `onSearch` on explicit submit (Enter or
+ * the search button). `showSuggestions` toggles an optional suggestions list
+ * driven by the `suggestions` state below.
+ */
 export function SearchBar({
   placeholder = 'Search creators, bounties, or projects...',
   onSearch,
@@ -48,10 +54,10 @@ export function SearchBar({
   const fetchSuggestions = useCallback(async (searchQuery: string) => {
     try {
       setIsLoading(true);
-      // This would call your API endpoint for suggestions
-      // const res = await fetch(`/api/search/suggestions?q=${searchQuery}`);
-      // const data = await res.json();
-      // setSuggestions(data);
+      // No suggestions endpoint exists yet, so this resolves with none.
+      // When /api/search/suggestions lands, fetch it here and hand the
+      // result to setSuggestions.
+      void searchQuery;
     } catch (error) {
       console.error('Error fetching suggestions:', error);
     } finally {

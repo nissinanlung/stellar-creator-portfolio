@@ -15,14 +15,11 @@ import {
   deleteUser,
   getUsersSummary,
 } from '@/app/admin/actions';
+import { KYCReviewPanel } from '@/components/admin/kyc-review-panel';
 import { Role } from '@prisma/client';
+import { StatusBadge } from '@/components/ui/status-badge';
 
 const ROLES: Role[] = ['ADMIN', 'CLIENT', 'CREATOR', 'USER'];
-const STATUS_COLORS: Record<string, string> = {
-  active: 'bg-green-500/10 text-green-600 border-green-500/20',
-  suspended: 'bg-red-500/10 text-red-600 border-red-500/20',
-  pending: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
-};
 
 interface AdminUser {
   id: string;
@@ -227,7 +224,15 @@ export default function AdminUsersPage() {
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground text-sm">Loading...</td></tr>
+                  Array.from({ length: 8 }).map((_, i) => (
+                    <tr key={i} className="border-b border-border">
+                      {Array.from({ length: 7 }).map((__, j) => (
+                        <td key={j} className="px-4 py-3">
+                          <div className="h-4 bg-muted rounded animate-pulse" style={{ width: j === 1 ? '80%' : '60%' }} />
+                        </td>
+                      ))}
+                    </tr>
+                  ))
                 ) : filtered.length === 0 ? (
                   <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground text-sm">No users found</td></tr>
                 ) : filtered.map((user) => (
@@ -250,9 +255,7 @@ export default function AdminUsersPage() {
                       </select>
                     </td>
                     <td className="px-4 py-3">
-                      <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${STATUS_COLORS[user.status]}`}>
-                        {user.status}
-                      </span>
+                      <StatusBadge status={user.status} />
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">{user.joinedAt}</td>
                     <td className="px-4 py-3">{user.bounties}</td>
@@ -279,6 +282,8 @@ export default function AdminUsersPage() {
           </div>
         </CardContent>
       </Card>
+
+      <KYCReviewPanel />
     </div>
   );
 }

@@ -1,17 +1,26 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Header } from '@/components/header';
 import { Footer } from '@/components/footer';
-import { CreatorCard } from '@/components/creator-card';
+import { CreatorCard } from '@/components/cards/creator-card';
+import { CardSkeletonGrid } from '@/components/skeletons/card-skeleton';
+import { EmptyState } from '@/components/common/empty-state';
 import { Button } from '@/components/ui/button';
-import { creators, disciplines } from '@/lib/creators-data';
+import { creators, disciplines } from '@/lib/services/creators-data';
 import { ArrowRight, Search, Star } from 'lucide-react';
 
 export default function FreelancersPage() {
   const [selectedDiscipline, setSelectedDiscipline] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    // Simulate data loading to show skeleton on initial mount
+    const timer = setTimeout(() => setIsLoading(false), 300);
+    return () => clearTimeout(timer);
+  }, []);
 
   const filteredCreators = creators.filter((creator) => {
     const disciplineMatch = selectedDiscipline === 'All' || creator.discipline === selectedDiscipline;
@@ -34,7 +43,7 @@ export default function FreelancersPage() {
           <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="text-center mb-12">
               <h1 className="text-4xl sm:text-5xl font-bold text-foreground mb-4 text-balance">
-                Hire Stellar Freelancers
+                Hire Tamgora Freelancers
               </h1>
               <p className="text-lg text-muted-foreground max-w-2xl mx-auto text-balance">
                 Find expert freelancers across design, writing, content creation, marketing, and more.
@@ -44,9 +53,14 @@ export default function FreelancersPage() {
             {/* Search Bar */}
             <div className="max-w-2xl mx-auto mb-8">
               <div className="relative">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground" size={20} />
+                <Search
+                  className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground"
+                  size={20}
+                  aria-hidden="true"
+                />
                 <input
-                  type="text"
+                  type="search"
+                  aria-label="Search freelancers by name, skills, or expertise"
                   placeholder="Search by name, skills, or expertise..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
@@ -62,11 +76,15 @@ export default function FreelancersPage() {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             {/* Filters */}
             <div className="mb-12 pb-8 border-b border-border">
-              <h3 className="text-lg font-semibold text-foreground mb-4">Filter by Discipline</h3>
-              <div className="flex flex-wrap gap-2">
+              <h3 id="discipline-filter-heading" className="text-lg font-semibold text-foreground mb-4">
+                Filter by Discipline
+              </h3>
+              <div className="flex flex-wrap gap-2" role="group" aria-labelledby="discipline-filter-heading">
                 {disciplines.map((discipline) => (
                   <button
                     key={discipline}
+                    type="button"
+                    aria-pressed={selectedDiscipline === discipline}
                     onClick={() => setSelectedDiscipline(discipline)}
                     className={`px-4 py-2 rounded-lg font-medium transition-all duration-200 ease-out ${
                       selectedDiscipline === discipline
@@ -82,31 +100,33 @@ export default function FreelancersPage() {
 
             {/* Results */}
             <div>
-              <p className="text-sm text-muted-foreground mb-8">
-                Showing {filteredCreators.length} freelancer{filteredCreators.length !== 1 ? 's' : ''}
-              </p>
+              {!isLoading && (
+                <p className="text-sm text-muted-foreground mb-8" aria-live="polite">
+                  Showing {filteredCreators.length} freelancer{filteredCreators.length !== 1 ? 's' : ''}
+                </p>
+              )}
 
-              {filteredCreators.length > 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {isLoading ? (
+                <CardSkeletonGrid count={6} />
+              ) : filteredCreators.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-5 lg:gap-6">
                   {filteredCreators.map((creator) => (
                     <CreatorCard key={creator.id} creator={creator} />
                   ))}
                 </div>
               ) : (
-                <div className="text-center py-16">
-                  <p className="text-lg text-muted-foreground mb-4">
-                    No freelancers match your search.
-                  </p>
-                  <Button
-                    variant="outline"
-                    onClick={() => {
+                <EmptyState
+                  icon={Search}
+                  title="No freelancers match your search"
+                  description="Try adjusting your filters or search terms to find the perfect freelancer."
+                  action={{
+                    label: 'Clear Filters',
+                    onClick: () => {
                       setSelectedDiscipline('All');
                       setSearchQuery('');
-                    }}
-                  >
-                    Clear Filters
-                  </Button>
-                </div>
+                    },
+                  }}
+                />
               )}
             </div>
           </div>
@@ -161,7 +181,7 @@ export default function FreelancersPage() {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="text-center mb-12">
               <h2 className="text-3xl sm:text-4xl font-bold text-foreground mb-4">
-                Why Hire from Stellar?
+                Why Hire from Tamgora?
               </h2>
             </div>
 
@@ -187,7 +207,7 @@ export default function FreelancersPage() {
                 return (
                   <div key={index} className="bg-card border border-border rounded-lg p-8 hover:shadow-lg transition-all">
                     <div className="w-12 h-12 bg-primary/20 rounded-lg flex items-center justify-center mb-4">
-                      <Icon size={24} className="text-primary" />
+                      <Icon size={24} className="text-primary" aria-hidden="true" />
                     </div>
                     <h3 className="text-lg font-bold text-foreground mb-2">{feature.title}</h3>
                     <p className="text-muted-foreground">{feature.description}</p>
@@ -205,12 +225,16 @@ export default function FreelancersPage() {
               Can't find what you need?
             </h2>
             <p className="text-lg text-muted-foreground mb-8">
-              Post your project on Stellar and let freelancers come to you.
+              Post your project on Tamgora and let freelancers come to you.
             </p>
             <Link href="/bounties">
               <Button size="lg" className="group">
                 Post a Project
-                <ArrowRight size={18} className="ml-2 group-hover:translate-x-1 transition-transform" />
+                <ArrowRight
+                  size={18}
+                  className="ml-2 group-hover:translate-x-1 transition-transform"
+                  aria-hidden="true"
+                />
               </Button>
             </Link>
           </div>

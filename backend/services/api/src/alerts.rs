@@ -164,7 +164,7 @@ pub async fn create_alert(
         read_at: None,
     };
 
-    store.alerts.lock().unwrap().insert(id.clone(), alert.clone());
+    store.alerts.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), alert.clone());
 
     tracing::info!("Alert {} created by user {}", id, claims.sub);
 
@@ -189,7 +189,7 @@ pub async fn list_alerts(
     let alerts: Vec<Alert> = store
         .alerts
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .values()
         .filter(|a| a.user_id == claims.sub)
         .cloned()
@@ -235,7 +235,7 @@ pub async fn update_alert(
         ));
     }
 
-    let mut store_lock = store.alerts.lock().unwrap();
+    let mut store_lock = store.alerts.lock().unwrap_or_else(|e| e.into_inner());
 
     let alert = match store_lock.get(&alert_id) {
         Some(a) => a.clone(),
@@ -307,7 +307,7 @@ pub async fn delete_alert(
     };
 
     let alert_id = path.into_inner();
-    let mut store_lock = store.alerts.lock().unwrap();
+    let mut store_lock = store.alerts.lock().unwrap_or_else(|e| e.into_inner());
 
     let alert = match store_lock.get(&alert_id) {
         Some(a) => a.clone(),
@@ -434,14 +434,15 @@ mod tests {
     // ── update ────────────────────────────────────────────────────────────────
 
     /// Helper: create an alert as `owner_sub` and return its ID.
-    async fn seed_alert(
-        app: &impl actix_web::dev::Service<
-            actix_web::dev::ServiceRequest,
-            Response = actix_web::dev::ServiceResponse,
+    async fn seed_alert<S, B>(app: &S, owner_sub: &str) -> String
+    where
+        S: actix_web::dev::Service<
+            actix_http::Request,
+            Response = actix_web::dev::ServiceResponse<B>,
             Error = actix_web::Error,
         >,
-        owner_sub: &str,
-    ) -> String {
+        B: actix_web::body::MessageBody,
+    {
         let token = make_token(owner_sub, "creator", 3600);
         let req = awtest::TestRequest::post()
             .uri("/api/v1/alerts")
@@ -714,5 +715,192 @@ mod tests {
         let alerts = body["data"].as_array().unwrap();
         assert_eq!(alerts.len(), 2);
         assert!(alerts.iter().all(|a| a["userId"] == "user-1"));
+    }
+
+    #[actix_web::test]
+    async fn list_without_token_returns_401() {
+        std::env::remove_var("JWT_SECRET");
+        let store = web::Data::new(AlertStore::new());
+        let app = awtest::init_service(build_app(store)).await;
+
+        let req = awtest::TestRequest::get().uri("/api/v1/alerts").to_request();
+
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    async fn create_alert_defaults_severity_and_trims_fields() {
+        std::env::remove_var("JWT_SECRET");
+        let store = web::Data::new(AlertStore::new());
+        let app = awtest::init_service(build_app(store.clone())).await;
+        let token = make_token("user-1", "creator", 3600);
+
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/alerts")
+            .insert_header(("Authorization", format!("Bearer {}", token)))
+            .set_json(serde_json::json!({ "title": "  Padded  ", "message": "  body  " }))
+            .to_request();
+
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::CREATED);
+
+        let body: serde_json::Value = awtest::read_body_json(resp).await;
+        assert_eq!(body["data"]["title"], "Padded");
+        assert_eq!(body["data"]["message"], "body");
+        assert_eq!(body["data"]["severity"], "info");
+        assert!(body["data"]["readAt"].is_null());
+        assert_eq!(store.alerts.lock().unwrap().len(), 1);
+    }
+
+    #[actix_web::test]
+    async fn create_alert_empty_title_and_message_reports_both_fields() {
+        std::env::remove_var("JWT_SECRET");
+        let store = web::Data::new(AlertStore::new());
+        let app = awtest::init_service(build_app(store.clone())).await;
+        let token = make_token("user-1", "creator", 3600);
+
+        let req = awtest::TestRequest::post()
+            .uri("/api/v1/alerts")
+            .insert_header(("Authorization", format!("Bearer {}", token)))
+            .set_json(serde_json::json!({ "title": "", "message": " " }))
+            .to_request();
+
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(store.alerts.lock().unwrap().is_empty());
+    }
+
+    #[actix_web::test]
+    async fn owner_can_clear_read_timestamp_and_change_severity() {
+        std::env::remove_var("JWT_SECRET");
+        let store = web::Data::new(AlertStore::new());
+        let app = awtest::init_service(build_app(store)).await;
+
+        let id = seed_alert(&app, "user-1").await;
+        let token = make_token("user-1", "creator", 3600);
+
+        let mark = awtest::TestRequest::patch()
+            .uri(&format!("/api/v1/alerts/{}", id))
+            .insert_header(("Authorization", format!("Bearer {}", token)))
+            .set_json(serde_json::json!({ "markRead": true }))
+            .to_request();
+        awtest::call_service(&app, mark).await;
+
+        let req = awtest::TestRequest::patch()
+            .uri(&format!("/api/v1/alerts/{}", id))
+            .insert_header(("Authorization", format!("Bearer {}", token)))
+            .set_json(serde_json::json!({ "markRead": false, "severity": "critical" }))
+            .to_request();
+
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        let body: serde_json::Value = awtest::read_body_json(resp).await;
+        assert!(body["data"]["readAt"].is_null());
+        assert_eq!(body["data"]["severity"], "critical");
+        // Fields not in the request are left untouched.
+        assert_eq!(body["data"]["title"], "Seed alert");
+    }
+
+    #[actix_web::test]
+    async fn deleted_alert_is_removed_from_store() {
+        std::env::remove_var("JWT_SECRET");
+        let store = web::Data::new(AlertStore::new());
+        let app = awtest::init_service(build_app(store.clone())).await;
+
+        let id = seed_alert(&app, "user-1").await;
+        let token = make_token("user-1", "creator", 3600);
+
+        let req = awtest::TestRequest::delete()
+            .uri(&format!("/api/v1/alerts/{}", id))
+            .insert_header(("Authorization", format!("Bearer {}", token)))
+            .to_request();
+        awtest::call_service(&app, req).await;
+
+        assert!(!store.alerts.lock().unwrap().contains_key(&id));
+    }
+
+    // ── pure helpers ──────────────────────────────────────────────────────────
+
+    fn sample_alert(user_id: &str) -> Alert {
+        Alert {
+            id: "a-1".to_string(),
+            user_id: user_id.to_string(),
+            title: "t".to_string(),
+            message: "m".to_string(),
+            severity: AlertSeverity::Warning,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            read_at: None,
+        }
+    }
+
+    fn claims(sub: &str, role: &str) -> Claims {
+        Claims { sub: sub.to_string(), exp: 0, role: role.to_string() }
+    }
+
+    #[test]
+    fn is_owner_or_admin_checks_sub_and_role() {
+        let alert = sample_alert("user-1");
+        assert!(is_owner_or_admin(&claims("user-1", "creator"), &alert));
+        assert!(is_owner_or_admin(&claims("someone-else", "admin"), &alert));
+        assert!(!is_owner_or_admin(&claims("user-2", "creator"), &alert));
+        assert!(!is_owner_or_admin(&claims("user-2", "Admin"), &alert));
+    }
+
+    #[test]
+    fn validate_create_request_flags_blank_fields() {
+        let ok = CreateAlertRequest {
+            title: "t".to_string(),
+            message: "m".to_string(),
+            severity: None,
+        };
+        assert!(validate_create_request(&ok).is_empty());
+
+        let bad = CreateAlertRequest {
+            title: "  ".to_string(),
+            message: "".to_string(),
+            severity: None,
+        };
+        let fields: Vec<String> = validate_create_request(&bad).into_iter().map(|(f, _)| f).collect();
+        assert_eq!(fields, vec!["title", "message"]);
+    }
+
+    #[test]
+    fn validate_update_request_only_checks_provided_fields() {
+        let empty = UpdateAlertRequest { title: None, message: None, severity: None, mark_read: None };
+        assert!(validate_update_request(&empty).is_empty());
+
+        let bad_message = UpdateAlertRequest {
+            title: Some("fine".to_string()),
+            message: Some("   ".to_string()),
+            severity: None,
+            mark_read: None,
+        };
+        let errors = validate_update_request(&bad_message);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].0, "message");
+    }
+
+    #[test]
+    fn severity_serializes_lowercase() {
+        assert_eq!(serde_json::to_value(AlertSeverity::Critical).unwrap(), "critical");
+        let parsed: AlertSeverity = serde_json::from_str("\"warning\"").unwrap();
+        assert_eq!(parsed, AlertSeverity::Warning);
+        assert!(serde_json::from_str::<AlertSeverity>("\"Warning\"").is_err());
+    }
+
+    #[test]
+    fn alert_serializes_camel_case() {
+        let value = serde_json::to_value(sample_alert("user-1")).unwrap();
+        assert_eq!(value["userId"], "user-1");
+        assert_eq!(value["createdAt"], "2026-01-01T00:00:00Z");
+        assert!(value.get("readAt").is_some());
+        assert!(value.get("user_id").is_none());
+    }
+
+    #[test]
+    fn alert_store_default_is_empty() {
+        assert!(AlertStore::default().alerts.lock().unwrap().is_empty());
     }
 }

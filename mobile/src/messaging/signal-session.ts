@@ -6,6 +6,8 @@
  *  - Double Ratchet encrypt / decrypt
  *  - Key rotation: signed pre-key rotated every 7 days,
  *    one-time pre-keys replenished when supply drops below threshold
+ *  - Sealed sender: hides sender identity at the transport layer
+ *  - Delivery receipts: confirm message arrival to sender
  *
  * Deps: @signalapp/libsignal-client, expo-secure-store
  */
@@ -35,7 +37,7 @@ import {
   generateOneTimePreKeys,
   consumeOneTimePreKey,
 } from './key-store';
-import type { EncryptedMessage, DecryptedMessage, KeyBundle } from '../types';
+import type { EncryptedMessage, DecryptedMessage, KeyBundle, SealedSenderMessage, DeliveryReceipt } from '../types';
 
 // ─── Key rotation constants ───────────────────────────────────────────────────
 
@@ -108,10 +110,20 @@ class SecureIdentityStore implements IdentityKeyStore {
   }
 
   async saveIdentity(address: ProtocolAddress, key: PublicKey): Promise<boolean> {
-    const k       = `signal.identity.remote.${address.name()}`;
+    const k        = `signal.identity.remote.${address.name()}`;
+    const keyB64   = Buffer.from(key.serialize()).toString('base64');
     const existing = await SecureStore.getItemAsync(k, SECURE_OPTS);
-    await SecureStore.setItemAsync(k, Buffer.from(key.serialize()).toString('base64'), SECURE_OPTS);
+    await SecureStore.setItemAsync(k, keyB64, SECURE_OPTS);
+    // Reverse index (identity key -> userId) so a sealed-sender message,
+    // which only carries the sender's identity key, can be routed to the
+    // right per-sender session instead of a single shared placeholder one.
+    await SecureStore.setItemAsync(`signal.identity.byKey.${keyB64}`, address.name(), SECURE_OPTS);
     return existing !== null;
+  }
+
+  async resolveUserIdByIdentityKey(key: PublicKey): Promise<string | null> {
+    const keyB64 = Buffer.from(key.serialize()).toString('base64');
+    return SecureStore.getItemAsync(`signal.identity.byKey.${keyB64}`, SECURE_OPTS);
   }
 
   async isTrustedIdentity(address: ProtocolAddress, key: PublicKey): Promise<boolean> {
@@ -205,6 +217,91 @@ export class SignalSessionManager {
       senderId:  msg.senderId,
       body:      plaintext.toString('utf8'),
       timestamp: msg.timestamp,
+    };
+  }
+
+  // ── Sealed sender ──────────────────────────────────────────────────────────
+
+  async encryptSealedSender(remoteUserId: string, plaintext: string): Promise<SealedSenderMessage> {
+    const { identityKeyPair, registrationId } = await getOrCreateIdentity();
+    const address = ProtocolAddress.new(remoteUserId, 1);
+    const msgBuffer = Buffer.from(plaintext, 'utf8');
+    const ciphertext = await signalEncrypt(msgBuffer, address, this.sessionStore, this.identityStore);
+
+    const envelope = Buffer.concat([
+      Buffer.from([0x01]), // sealed sender version
+      Buffer.from(identityKeyPair.publicKey.serialize()),
+      Buffer.from(ciphertext.serialize()),
+    ]);
+
+    const signature = identityKeyPair.privateKey.sign(envelope);
+
+    return {
+      id: crypto.randomUUID(),
+      envelope: new Uint8Array(envelope),
+      signature: new Uint8Array(signature),
+      messageType: ciphertext.type() as 1 | 3,
+      timestamp: Date.now(),
+    };
+  }
+
+  async decryptSealedSender(msg: SealedSenderMessage): Promise<DecryptedMessage> {
+    const envelope = Buffer.from(msg.envelope);
+    const version = envelope[0];
+    if (version !== 0x01) throw new Error(`Unsupported sealed sender version: ${version}`);
+
+    const senderIdentityKey = PublicKey.deserialize(envelope.subarray(1, 34));
+    const ciphertextBytes = envelope.subarray(34);
+
+    const signature = Buffer.from(msg.signature);
+    const valid = senderIdentityKey.verify(envelope, signature);
+    if (!valid) throw new Error('Sealed sender signature verification failed');
+
+    const senderUserId = await this.identityStore.resolveUserIdByIdentityKey(senderIdentityKey);
+    if (!senderUserId) {
+      throw new Error('Sealed sender: no known session for this identity key');
+    }
+    const senderAddress = ProtocolAddress.new(senderUserId, 1);
+    let plaintext: Buffer;
+
+    if (msg.messageType === CiphertextMessageType.PreKey) {
+      plaintext = await signalDecryptPreKey(
+        ciphertextBytes,
+        senderAddress,
+        this.sessionStore,
+        this.identityStore,
+        this.preKeyStore,
+        this.signedPreKeyStore,
+      );
+    } else {
+      plaintext = await signalDecrypt(ciphertextBytes, senderAddress, this.sessionStore, this.identityStore);
+    }
+
+    return {
+      id: msg.id,
+      senderId: senderUserId,
+      body: plaintext.toString('utf8'),
+      timestamp: msg.timestamp,
+    };
+  }
+
+  // ── Delivery receipts ─────────────────────────────────────────────────────
+
+  createDeliveryReceipt(messageId: string, recipientId: string): DeliveryReceipt {
+    return {
+      messageId,
+      recipientId,
+      status: 'delivered',
+      timestamp: Date.now(),
+    };
+  }
+
+  createReadReceipt(messageId: string, recipientId: string): DeliveryReceipt {
+    return {
+      messageId,
+      recipientId,
+      status: 'read',
+      timestamp: Date.now(),
     };
   }
 

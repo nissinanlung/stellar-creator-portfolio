@@ -86,16 +86,6 @@ jobs:
           IV=$(openssl rand -hex 12)
           TAG_FILE=tag.bin
 
-          # Encrypt and capture the 16-byte auth tag
-          openssl enc -aes-256-gcm \
-            -K "$OTA_AES_KEY" \
-            -iv "$IV" \
-            -in patch.bin \
-            -out patch.enc \
-            -nosalt
-
-          # openssl writes tag to stderr with -aes-256-gcm; extract via EVP API
-          # For CI simplicity we use a Node helper to get the tag properly
           node -e "
             const crypto = require('crypto');
             const fs = require('fs');
@@ -127,6 +117,67 @@ jobs:
             "s3://${OTA_BUCKET}/patches/${{ steps.encrypt.outputs.version }}.enc" \
             --content-type application/octet-stream
 
+      # ── Sign manifest with Ed25519 ───────────────────────────────────────────
+      # OTA_SIGNING_KEY must be stored as a repository secret containing the
+      # base64-encoded Ed25519 private key (32-byte seed, not the full 64-byte
+      # keypair). Generate once with:
+      #   node -e "
+      #     const {generateKeyPairSync} = require('crypto');
+      #     const {privateKey} = generateKeyPairSync('ed25519');
+      #     const der = privateKey.export({type:'pkcs8',format:'der'});
+      #     // Last 32 bytes of the PKCS#8 DER are the raw seed
+      #     console.log(der.slice(-32).toString('base64'));
+      #   "
+      # Store the printed value as the OTA_SIGNING_KEY secret.
+      # Store the matching base64 public key as OTA_SIGNING_PUBLIC_KEY and
+      # bundle it in the mobile app at build time so clients can verify.
+      - name: Sign manifest
+        id: sign
+        env:
+          OTA_SIGNING_KEY: ${{ secrets.OTA_SIGNING_KEY }}
+        run: |
+          node -e "
+            const crypto = require('crypto');
+            const fs = require('fs');
+
+            // Reconstruct the Ed25519 private key from the 32-byte seed stored
+            // in the secret (base64-encoded).
+            const seed = Buffer.from(process.env.OTA_SIGNING_KEY, 'base64');
+            if (seed.length !== 32) {
+              throw new Error('OTA_SIGNING_KEY must be a base64-encoded 32-byte Ed25519 seed');
+            }
+
+            // Node's crypto accepts raw Ed25519 seeds via the 'jwk' or
+            // PKCS#8 DER route. Easiest: wrap seed in a minimal PKCS#8 DER.
+            // PKCS#8 header for Ed25519 (RFC 8410):
+            //   30 2e 02 01 00 30 05 06 03 2b 65 70 04 22 04 20 <32-byte seed>
+            const pkcs8Header = Buffer.from(
+              '302e020100300506032b657004220420', 'hex'
+            );
+            const pkcs8Der = Buffer.concat([pkcs8Header, seed]);
+            const privKey = crypto.createPrivateKey({
+              key: pkcs8Der,
+              format: 'der',
+              type: 'pkcs8',
+            });
+
+            // Sign the canonical manifest payload (all fields except
+            // 'signature' itself, sorted by key for determinism).
+            const payload = {
+              iv:             '${{ steps.encrypt.outputs.iv }}',
+              minBaseVersion: '1.0.0',
+              patchSize:      ${{ steps.encrypt.outputs.patch_size }},
+              patchUrl:       'https://${OTA_BUCKET}.s3.${AWS_REGION}.amazonaws.com/patches/${{ steps.encrypt.outputs.version }}.enc',
+              sha256:         '${{ steps.encrypt.outputs.sha256 }}',
+              tag:            '${{ steps.encrypt.outputs.tag }}',
+              version:        '${{ steps.encrypt.outputs.version }}',
+            };
+            const canonical = JSON.stringify(payload, Object.keys(payload).sort());
+            const sig = crypto.sign(null, Buffer.from(canonical), privKey);
+            fs.writeFileSync('manifest_sig.txt', sig.toString('base64'));
+          "
+          echo "signature=$(cat manifest_sig.txt)" >> "$GITHUB_OUTPUT"
+
       - name: Write and upload manifest
         run: |
           cat > manifest.json <<EOF
@@ -137,7 +188,8 @@ jobs:
             "iv": "${{ steps.encrypt.outputs.iv }}",
             "tag": "${{ steps.encrypt.outputs.tag }}",
             "patchSize": ${{ steps.encrypt.outputs.patch_size }},
-            "minBaseVersion": "1.0.0"
+            "minBaseVersion": "1.0.0",
+            "signature": "${{ steps.sign.outputs.signature }}"
           }
           EOF
           aws s3 cp manifest.json \
@@ -156,3 +208,4 @@ jobs:
           echo "### OTA Release ${{ steps.encrypt.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- Patch size: ${{ steps.encrypt.outputs.patch_size }} bytes" >> "$GITHUB_STEP_SUMMARY"
           echo "- SHA-256: \`${{ steps.encrypt.outputs.sha256 }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Ed25519 signature: \`${{ steps.sign.outputs.signature }}\`" >> "$GITHUB_STEP_SUMMARY"

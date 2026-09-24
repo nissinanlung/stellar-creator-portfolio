@@ -1,7 +1,7 @@
 # Multi-stage production build for the Next.js application (#783).
 #
 # Build:  docker build -f Dockerfile.app -t stellar-creator-portfolio .
-# Run:    docker run -p 3000:3000 stellar-creator-portfolio
+# Run:   docker run -p 3000:3000 stellar-creator-portfolio
 
 FROM node:22-alpine AS deps
 WORKDIR /app

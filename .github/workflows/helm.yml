@@ -4,10 +4,12 @@ on:
   pull_request:
     paths:
       - 'helm/**'
+      - 'infrastructure/k8s/helm/**'
   push:
     branches: [main, dev]
     paths:
       - 'helm/**'
+      - 'infrastructure/k8s/helm/**'
 
 jobs:
   validate:
@@ -23,6 +25,13 @@ jobs:
       - name: Lint subcharts
         run: |
           for chart in helm/charts/*/; do
+            echo "Linting $chart"
+            helm lint "$chart"
+          done
+
+      - name: Lint infrastructure k8s charts
+        run: |
+          for chart in infrastructure/k8s/helm/*/; do
             echo "Linting $chart"
             helm lint "$chart"
           done

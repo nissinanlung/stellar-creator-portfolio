@@ -274,7 +274,7 @@ export async function startGeofencing(
       distanceInterval: BACKGROUND_DISTANCE_INTERVAL,
       showsBackgroundLocationIndicator: false, // silent — no blue bar on iOS
       foregroundService: {
-        notificationTitle: "Stellar",
+        notificationTitle: "Tamgora",
         notificationBody: "Checking for nearby events…",
       },
     });
@@ -300,6 +300,60 @@ export async function stopGeofencing(): Promise<void> {
   } catch {
     // Task may not be running — ignore
   }
+}
+
+// ─── Nearby creator discovery (#762) ─────────────────────────────────────────
+
+export interface NearbyCreator {
+  id: string;
+  name: string;
+  discipline: string;
+  latitude: number;
+  longitude: number;
+  distanceKm: number;
+}
+
+export interface NearbyBounty {
+  id: string;
+  title: string;
+  budget: number;
+  latitude: number;
+  longitude: number;
+  distanceKm: number;
+}
+
+export async function fetchNearbyCreators(
+  latitude: number,
+  longitude: number,
+  radiusKm: number,
+  apiBaseUrl: string,
+): Promise<NearbyCreator[]> {
+  const response = await fetch(
+    `${apiBaseUrl}/api/creators/nearby?lat=${latitude}&lng=${longitude}&radius=${radiusKm}`,
+  );
+  if (!response.ok) throw new Error(`Failed to fetch nearby creators: ${response.status}`);
+  const data = await response.json();
+  return data.creators ?? [];
+}
+
+export async function fetchNearbyBounties(
+  latitude: number,
+  longitude: number,
+  radiusKm: number,
+  apiBaseUrl: string,
+): Promise<NearbyBounty[]> {
+  const response = await fetch(
+    `${apiBaseUrl}/api/bounties/nearby?lat=${latitude}&lng=${longitude}&radius=${radiusKm}`,
+  );
+  if (!response.ok) throw new Error(`Failed to fetch nearby bounties: ${response.status}`);
+  const data = await response.json();
+  return data.bounties ?? [];
+}
+
+export async function getCurrentPosition() {
+  const Location = await loadLocation();
+  if (!Location) throw new Error("expo-location is not installed");
+  return Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
 }
 
 /**

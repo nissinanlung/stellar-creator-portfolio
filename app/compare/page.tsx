@@ -1,18 +1,19 @@
 'use client';
 
 import { useSearchParams, useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import { Header } from '@/components/header';
 import { Footer } from '@/components/footer';
 import { Button } from '@/components/ui/button';
 import { ChevronLeft } from 'lucide-react';
-import { creators as allCreators, Creator } from '@/lib/creators-data';
+import { creators as allCreators, Creator } from '@/lib/services/creators-data';
 
-export default function ComparePage() {
+function ComparePageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const [comparedCreators, setComparedCreators] = useState<Creator[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+
 
   useEffect(() => {
     const ids = searchParams.get('ids');
@@ -87,7 +88,7 @@ export default function ComparePage() {
         {/* Comparison Table */}
         <section className="py-12">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 lg:gap-6">
               {comparedCreators.map((creator) => (
                 <div
                   key={creator.id}
@@ -201,11 +202,10 @@ export default function ComparePage() {
                         {creator.skills?.map((skill) => (
                           <span
                             key={skill}
-                            className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium transition-colors ${
-                              sharedSkills.includes(skill)
-                                ? 'bg-green-100 text-green-800'
-                                : 'bg-secondary text-secondary-foreground'
-                            }`}
+                            className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium transition-colors ${sharedSkills.includes(skill)
+                              ? 'bg-green-100 text-green-800'
+                              : 'bg-secondary text-secondary-foreground'
+                              }`}
                           >
                             {skill}
                             {sharedSkills.includes(skill) && ' ✓'}
@@ -250,5 +250,19 @@ export default function ComparePage() {
 
       <Footer />
     </div>
+  );
+}
+
+export default function ComparePage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center">
+          <p className="text-muted-foreground">Loading comparison...</p>
+        </div>
+      }
+    >
+      <ComparePageInner />
+    </Suspense>
   );
 }
