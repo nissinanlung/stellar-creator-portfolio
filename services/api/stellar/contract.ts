@@ -1,6 +1,6 @@
 import {
-  Address,
   Contract,
+  Transaction,
   TransactionBuilder,
   scValToNative,
   nativeToScVal,
@@ -14,7 +14,7 @@ export class ContractService {
   /**
    * Reads contract data (view call)
    */
-  async getContractData(contractId: string, key: string): Promise<any> {
+  async getContractData<T = unknown>(contractId: string, key: string): Promise<T | null> {
     const contract = new Contract(contractId);
     const result = await stellarClient.rpc.getContractData(
       contract.address(),
@@ -29,7 +29,7 @@ export class ContractService {
     // result.val is a LedgerEntryData union (account, trustline, contract
     // data, ...), not an ScVal itself - the actual stored value is nested
     // under its contractData() variant.
-    return scValToNative(result.val.contractData().val());
+    return scValToNative(result.val.contractData().val()) as T;
   }
 
   /**
@@ -38,7 +38,7 @@ export class ContractService {
   async invokeContractMethod(
     contractId: string,
     method: string,
-    args: any[],
+    args: unknown[],
     signer: Signer
   ): Promise<string> {
     const rpcServer = stellarClient.rpc;
@@ -54,7 +54,7 @@ export class ContractService {
     // (accountId + sequence number) - use it directly rather than
     // re-wrapping it.
     const call = contract.call(method, ...args.map((arg) => nativeToScVal(arg)));
-    let tx = new TransactionBuilder(
+    let tx: Transaction = new TransactionBuilder(
       sourceAccount,
       {
         fee: '100',
@@ -75,7 +75,7 @@ export class ContractService {
     tx = rpc.assembleTransaction(tx, simulation).build();
 
     // 5. Sign the transaction
-    tx = (await signer.signTransaction(tx as any)) as any;
+    tx = await signer.signTransaction(tx);
 
     // 6. Submit the transaction
     const response = await rpcServer.sendTransaction(tx);
