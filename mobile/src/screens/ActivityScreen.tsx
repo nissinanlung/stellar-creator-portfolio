@@ -46,6 +46,35 @@ interface Activity {
   };
 }
 
+// API response type from the notifications endpoint
+interface ApiActivity {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  read: boolean;
+  bountyId?: string;
+  applicationId?: string;
+  createdAt: string;
+}
+
+// Map API notification types to activity types
+function mapActivityType(type: string): ActivityType {
+  const typeMap: Record<string, ActivityType> = {
+    'bounty_created': 'bounty_created',
+    'bounty_applied': 'bounty_applied',
+    'project_completed': 'project_completed',
+    'review_received': 'review_received',
+    'message_received': 'message_received',
+    'BOUNTY_CREATED': 'bounty_created',
+    'BOUNTY_APPLIED': 'bounty_applied',
+    'PROJECT_COMPLETED': 'project_completed',
+    'REVIEW_RECEIVED': 'review_received',
+    'MESSAGE_RECEIVED': 'message_received',
+  };
+  return typeMap[type] ?? 'message_received';
+}
+
 interface ActivityScreenProps {
   onNavigate?: (screen: string, params?: any) => void;
 }
@@ -176,66 +205,28 @@ export function ActivityScreen({ onNavigate }: ActivityScreenProps) {
   const [error, setError] = useState<string | null>(null);
 
   // Mock activities until real API is available
-  const mockActivities: Activity[] = [
-    {
-      id: '1',
-      type: 'bounty_created',
-      title: 'New Bounty: Mobile App Design',
-      description: 'A new bounty for $2,500 has been posted for mobile app UI design.',
-      timestamp: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
-      read: false,
-      metadata: { bountyId: 'bounty-1', amount: 2500 },
-    },
-    {
-      id: '2', 
-      type: 'bounty_applied',
-      title: 'Application Submitted',
-      description: 'You successfully applied to "Brand Identity Redesign" bounty.',
-      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
-      read: false,
-      metadata: { bountyId: 'bounty-2' },
-    },
-    {
-      id: '3',
-      type: 'review_received',
-      title: 'New Review Received',
-      description: 'Sarah Johnson left you a 5-star review for the recent project.',
-      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 6).toISOString(),
-      read: true,
-      metadata: { userId: 'user-123' },
-    },
-    {
-      id: '4',
-      type: 'project_completed',
-      title: 'Project Completed',
-      description: 'Congratulations! You completed "E-commerce Dashboard" project.',
-      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(),
-      read: true,
-      metadata: { projectId: 'project-456', amount: 1200 },
-    },
-    {
-      id: '5',
-      type: 'message_received',
-      title: 'New Message',
-      description: 'Alex Chen sent you a message about the ongoing project.',
-      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24 * 2).toISOString(),
-      read: true,
-      metadata: { userId: 'user-789' },
-    },
-  ];
 
   const loadActivities = useCallback(async (isRefresh = false) => {
     try {
       if (!isRefresh) setLoading(true);
       setError(null);
 
-      // TODO: Replace with real API call
-      // const response = await apiClient.getActivities({ limit: 50 });
-      
-      // Simulate API delay
-      await new Promise(resolve => setTimeout(resolve, 800));
-      
-      setActivities(mockActivities);
+      // Fetch real activity data from the notifications API
+      const response = await apiClient.getActivities({ limit: 50 });
+      const fetchedActivities = response.items.map((item: ApiActivity) => ({
+        id: item.id,
+        type: mapActivityType(item.type),
+        title: item.title,
+        description: item.body,
+        timestamp: item.createdAt,
+        read: item.read,
+        metadata: {
+          bountyId: item.bountyId ?? undefined,
+          projectId: item.applicationId ?? undefined,
+        },
+      }));
+
+      setActivities(fetchedActivities);
     } catch (err) {
       const errorMessage = err instanceof ApiError
         ? err.message
