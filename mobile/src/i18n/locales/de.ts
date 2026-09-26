@@ -21,6 +21,23 @@ const de = {
     hoursAgo: 'vor {{count}} Std.',
     daysAgo: 'vor {{count}} Tagen',
   },
+
+  validation: {
+    required: 'Dieses Feld ist erforderlich',
+    email: 'Bitte gib eine gültige E-Mail-Adresse ein',
+    minLength: 'Mindestens {{min}} Zeichen erforderlich',
+    maxLength: 'Höchstens {{max}} Zeichen erlaubt',
+    pattern: 'Ungültiges Format',
+    password:
+      'Das Passwort muss mindestens 8 Zeichen enthalten, mit Groß- und Kleinbuchstabe, Zahl und Sonderzeichen',
+    phone: 'Bitte gib eine gültige Telefonnummer ein',
+    url: 'Bitte gib eine gültige URL ein',
+    numeric: 'Bitte gib eine gültige Zahl ein',
+    range: 'Der Wert muss zwischen {{min}} und {{max}} liegen',
+    match: 'Die Werte stimmen nicht überein',
+    stellarAddress: 'Bitte gib eine gültige Stellar-Adresse ein',
+    username: 'Der Benutzername darf nur Buchstaben, Zahlen, Unterstriche und Bindestriche enthalten',
+  },
   nav: {
     home: 'Startseite',
     creators: 'Ersteller',

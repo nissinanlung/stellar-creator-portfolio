@@ -22,6 +22,23 @@ const en = {
     hoursAgo: '{{count}}h ago',
     daysAgo: '{{count}}d ago',
   },
+
+  validation: {
+    required: 'This field is required',
+    email: 'Please enter a valid email address',
+    minLength: 'Minimum {{min}} characters required',
+    maxLength: 'Maximum {{max}} characters allowed',
+    pattern: 'Invalid format',
+    password:
+      'Password must be at least 8 characters with uppercase, lowercase, number, and special character',
+    phone: 'Please enter a valid phone number',
+    url: 'Please enter a valid URL',
+    numeric: 'Please enter a valid number',
+    range: 'Value must be between {{min}} and {{max}}',
+    match: 'Values do not match',
+    stellarAddress: 'Please enter a valid Stellar address',
+    username: 'Username can only contain letters, numbers, underscores, and hyphens',
+  },
   nav: {
     home: 'Home',
     creators: 'Creators',

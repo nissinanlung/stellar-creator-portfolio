@@ -21,6 +21,23 @@ const es = {
     hoursAgo: 'hace {{count}}h',
     daysAgo: 'hace {{count}}d',
   },
+
+  validation: {
+    required: 'Este campo es obligatorio',
+    email: 'Introduce una dirección de correo válida',
+    minLength: 'Se requieren al menos {{min}} caracteres',
+    maxLength: 'Se permiten como máximo {{max}} caracteres',
+    pattern: 'Formato no válido',
+    password:
+      'La contraseña debe tener al menos 8 caracteres con mayúscula, minúscula, número y carácter especial',
+    phone: 'Introduce un número de teléfono válido',
+    url: 'Introduce una URL válida',
+    numeric: 'Introduce un número válido',
+    range: 'El valor debe estar entre {{min}} y {{max}}',
+    match: 'Los valores no coinciden',
+    stellarAddress: 'Introduce una dirección de Stellar válida',
+    username: 'El nombre de usuario solo puede contener letras, números, guiones bajos y guiones',
+  },
   nav: {
     home: 'Inicio',
     creators: 'Creadores',
