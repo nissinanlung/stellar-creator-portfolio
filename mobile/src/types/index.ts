@@ -257,3 +257,43 @@ export interface MultiSigState {
   queueApproval: (taskId: string, signerId: string) => Promise<void>;
   approveSigner: (taskId: string, signerId: string) => void;
 }
+
+// ─── Theme / Dark Mode ────────────────────────────────────────────────────────
+
+/** Available theme modes: light, dark, or system (auto). */
+export type ThemeMode = 'light' | 'dark' | 'system';
+
+/**
+ * Theme colors object containing all semantic colors.
+ * Extends brand colors with system-aware light/dark variants.
+ */
+export interface ThemeColors {
+  // System colors (light/dark)
+  background: string;
+  surface: string;
+  surfaceElevated: string;
+  border: string;
+  borderStrong: string;
+  text: string;
+  textSecondary: string;
+  textTertiary: string;
+  textInverse: string;
+  placeholder: string;
+  
+  // Brand colors (always the same regardless of theme)
+  primary: string;
+  primaryDark: string;
+  primaryLight: string;
+  accent: string;
+  accentLight: string;
+  success: string;
+  successLight: string;
+  warning: string;
+  warningLight: string;
+  error: string;
+  errorLight: string;
+  info: string;
+  infoLight: string;
+  starFilled: string;
+  starEmpty: string;
+}
