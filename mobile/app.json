@@ -23,7 +23,20 @@
         "NSPhotoLibraryUsageDescription": "Tamgora needs access to your photo library to upload portfolio images.",
         "NSCameraUsageDescription": "Tamgora needs camera access to capture portfolio photos.",
         "NSPhotoLibraryAddUsageDescription": "Tamgora needs permission to save photos to your library.",
-        "NSFaceIDUsageDescription": "Tamgora uses Face ID or Touch ID to securely authenticate portfolio access."
+        "NSFaceIDUsageDescription": "Tamgora uses Face ID or Touch ID to securely authenticate portfolio access.",
+        "NSUserTrackingUsageDescription": "Tamgora uses tracking to provide personalized content and share experiences.",
+        "LSApplicationQueriesSchemes": [
+          "whatsapp",
+          "tg",
+          "fb",
+          "twitter",
+          "instagram",
+          "linkedin",
+          "snapchat",
+          "reddit",
+          "mailto",
+          "sms"
+        ]
       }
     },
     "android": {
@@ -36,7 +49,9 @@
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE",
         "CAMERA",
-        "READ_MEDIA_IMAGES"
+        "READ_MEDIA_IMAGES",
+        "INTERNET",
+        "ACCESS_NETWORK_STATE"
       ],
       "intentFilters": [
         {
@@ -60,8 +75,21 @@
             }
           ],
           "category": ["BROWSABLE", "DEFAULT"]
+        },
+        {
+          "action": "SEND",
+          "data": [
+            {
+              "mimeType": "text/plain"
+            },
+            {
+              "mimeType": "image/*"
+            }
+          ],
+          "category": ["DEFAULT"]
         }
-      ]
+      ],
+      "sharedUsers": []
     },
     "web": {
       "favicon": "./assets/favicon.png",

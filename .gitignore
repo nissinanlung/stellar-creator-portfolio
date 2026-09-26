@@ -84,5 +84,5 @@ jspm_packages/
 .env
 somzilla.md
 
-# PR description file (local reference only)
-pr-1378-1379-1380-1381.md
+# PR description files — local reference only, not for version control
+PR_*.md
