@@ -1,18 +1,29 @@
 'use client'
 
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import {
+  discoverTransferServer,
+  isSuccessStatus,
+  isTerminalStatus,
+  openInteractiveWindow,
+  pollUntilTerminal,
+  Sep24Error,
+  startInteractiveFlow,
+  type Sep24Transaction,
+} from '@/lib/stellar/sep24'
 
 /**
- * SEP-24 interactive deposit/withdraw flow.
+ * SEP-24 interactive deposit/withdraw flow (Issue #1393).
  *
- * Implements the SEP-24 interactive flow:
- * 1. POST to the anchor's TRANSFER_SERVER to initiate a transaction
- *    (POST /transactions/deposit/interactive or /transactions/withdraw/interactive)
- * 2. Open the returned interactive URL in a popup window
- * 3. Poll the transaction status (GET /transaction?id=...) until terminal
+ * Previously a stub that only moved a local `status` variable. It now runs the
+ * real protocol: discover the anchor's TRANSFER_SERVER, request an interactive
+ * URL, open it, and poll `/transaction` to a terminal status.
  *
- * @see https://github.com/StellarTechAlliance/SEP-24
+ * The polling is the part worth keeping: the anchor does its work out of band,
+ * so the popup closing tells you nothing about whether the transfer happened.
+ * A flow that stopped at "window closed" would report success for a transfer
+ * the anchor later rejected.
  */
 
 export type Sep24FlowKind = 'deposit' | 'withdraw'
@@ -29,281 +40,179 @@ export type Sep24TransactionStatus =
 export interface Sep24FlowProps {
   kind: Sep24FlowKind
   assetCode: string
+  /**
+   * The anchor's home domain (`TRANSFER_SERVER` is read from its stellar.toml),
+   * or a TRANSFER_SERVER URL directly. A full URL is used as-is; anything else
+   * is treated as a domain to discover.
+   */
   anchorTransferServerUrl: string
   account: string
+  /** SEP-10 JWT. The interactive endpoints require authentication. */
+  authToken?: string
+  amount?: string
   onStatusChange?: (status: Sep24TransactionStatus) => void
+  /** Receives every poll, for callers that want the full transaction record. */
+  onTransactionUpdate?: (tx: Sep24Transaction) => void
 }
 
-interface Sep24StartResponse {
-  id: string
-  interactive_url: string
-  status: Sep24TransactionStatus
+/**
+ * Collapses the ~15 statuses SEP-24 defines onto the four this component
+ * reports. Anything non-terminal is `pending_anchor` — the distinction between
+ * `pending_external` and `pending_trust` matters to an anchor, not to someone
+ * watching a spinner.
+ */
+function toComponentStatus(tx: Sep24Transaction): Sep24TransactionStatus {
+  if (tx.status === 'incomplete') return 'incomplete'
+  if (!isTerminalStatus(tx.status)) return 'pending_anchor'
+  return isSuccessStatus(tx.status) ? 'completed' : 'error'
 }
-
-interface Sep24TransactionResponse {
-  transaction: {
-    id: string
-    status: Sep24TransactionStatus
-    status_eta?: number
-    amount_in?: string
-    amount_out?: string
-    asset_in?: string
-    asset_out?: string
-    message?: string
-  }
-}
-
-const POLL_INTERVAL_MS = 3000
-const POLL_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes max
 
 export function Sep24Flow({
   kind,
   assetCode,
   anchorTransferServerUrl,
   account,
+  authToken,
+  amount,
   onStatusChange,
+  onTransactionUpdate,
 }: Sep24FlowProps) {
   const [status, setStatus] = useState<Sep24TransactionStatus>('idle')
-  const [transactionId, setTransactionId] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
   const [interactiveUrl, setInteractiveUrl] = useState<string | null>(null)
-  const popupRef = useRef<Window | null>(null)
-  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const pollStartRef = useRef<number>(0)
 
-  const updateStatus = useCallback(
-    (newStatus: Sep24TransactionStatus) => {
-      setStatus(newStatus)
-      onStatusChange?.(newStatus)
+  // Aborts the poll if the component unmounts mid-flow, so a closed page does
+  // not leave a request loop running against the anchor.
+  const abortRef = useRef<AbortController | null>(null)
+
+  useEffect(() => () => abortRef.current?.abort(), [])
+
+  const advance = useCallback(
+    (next: Sep24TransactionStatus) => {
+      setStatus(next)
+      onStatusChange?.(next)
     },
     [onStatusChange],
   )
 
-  const stopPolling = useCallback(() => {
-    if (pollTimerRef.current) {
-      clearInterval(pollTimerRef.current)
-      pollTimerRef.current = null
-    }
-  }, [])
-
-  // Poll the anchor's /transaction endpoint until the status is terminal
-  const pollTransactionStatus = useCallback(
-    async (txId: string, transferServerUrl: string) => {
-      stopPolling()
-      pollStartRef.current = Date.now()
-
-      pollTimerRef.current = setInterval(async () => {
-        // Timeout check
-        if (Date.now() - pollStartRef.current > POLL_TIMEOUT_MS) {
-          stopPolling()
-          setError('Transaction polling timed out')
-          updateStatus('error')
-          return
-        }
-
-        try {
-          const url = `${transferServerUrl}/transaction?id=${encodeURIComponent(txId)}`
-          const response = await fetch(url, {
-            method: 'GET',
-            headers: { 'Content-Type': 'application/json' },
-          })
-
-          if (!response.ok) {
-            throw new Error(`Polling failed: ${response.status}`)
-          }
-
-          const data: Sep24TransactionResponse = await response.json()
-          const txStatus = data.transaction.status
-
-          // Map anchor status to our status
-          if (
-            txStatus === 'completed' ||
-            txStatus === 'error' ||
-            txStatus === 'pending_external'
-          ) {
-            stopPolling()
-            updateStatus(txStatus)
-            if (txStatus === 'error' && data.transaction.message) {
-              setError(data.transaction.message)
-            }
-          } else {
-            updateStatus(txStatus)
-          }
-        } catch (err) {
-          // Don't stop polling on transient errors, just log
-          console.warn('SEP-24 polling error:', err)
-        }
-      }, POLL_INTERVAL_MS)
-    },
-    [stopPolling, updateStatus],
-  )
-
-  const startFlow = async () => {
-    if (status !== 'idle') return
-    setError(null)
-    updateStatus('incomplete')
-
-    try {
-      // Step 1: Request the interactive URL from the anchor's TRANSFER_SERVER
-      const endpoint = kind === 'deposit'
-        ? '/transactions/deposit/interactive'
-        : '/transactions/withdraw/interactive'
-
-      const response = await fetch(`${anchorTransferServerUrl}${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          asset_code: assetCode,
-          account,
-        }),
-      })
-
-      if (!response.ok) {
-        const errorBody = await response.text()
-        throw new Error(`Anchor returned ${response.status}: ${errorBody}`)
-      }
-
-      const data: Sep24StartResponse = await response.json()
-
-      if (!data.interactive_url) {
-        throw new Error('Anchor did not return an interactive URL')
-      }
-
-      setTransactionId(data.id)
-      setInteractiveUrl(data.interactive_url)
-
-      // Step 2: Open the interactive URL in a popup window
-      const popup = window.open(
-        data.interactive_url,
-        'sep24-interactive',
-        'width=480,height=720,scrollbars=yes,resizable=yes',
-      )
-
-      if (!popup) {
-        throw new Error('Popup blocked. Please allow popups for this site.')
-      }
-
-      popupRef.current = popup
-
-      // Step 3: Start polling the transaction status
-      updateStatus('pending_anchor')
-      await pollTransactionStatus(data.id, anchorTransferServerUrl)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start SEP-24 flow')
-      updateStatus('error')
-    }
-  }
-
-  // Check if the popup was closed by the user
-  useEffect(() => {
-    if (!popupRef.current || status === 'idle' || status === 'completed' || status === 'error') {
+  const startFlow = useCallback(async () => {
+    if (!authToken) {
+      setMessage('Sign in with your wallet before starting a transfer.')
+      advance('error')
       return
     }
 
-    const checkPopup = setInterval(() => {
-      if (popupRef.current?.closed) {
-        clearInterval(checkPopup)
-        // If the popup was closed and we're still pending, update status
-        if (status === 'incomplete' || status === 'pending_user') {
-          updateStatus('pending_anchor')
-        }
-      }
-    }, 1000)
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
 
-    return () => clearInterval(checkPopup)
-  }, [status, updateStatus])
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      stopPolling()
-      popupRef.current?.close()
-    }
-  }, [stopPolling])
-
-  const reset = () => {
-    stopPolling()
-    popupRef.current?.close()
-    popupRef.current = null
-    setStatus('idle')
-    setTransactionId(null)
+    setMessage(null)
     setInteractiveUrl(null)
-    setError(null)
-  }
+    advance('incomplete')
 
-  const isTerminal = status === 'completed' || status === 'error'
+    try {
+      const transferServer = /^https?:\/\//.test(anchorTransferServerUrl)
+        ? anchorTransferServerUrl.replace(/\/+$/, '')
+        : await discoverTransferServer(anchorTransferServerUrl)
+
+      const interactive = await startInteractiveFlow({
+        transferServer,
+        kind,
+        assetCode,
+        account,
+        authToken,
+        amount,
+      })
+
+      setInteractiveUrl(interactive.url)
+
+      // A blocked popup is recoverable — the URL is rendered as a link below —
+      // so it must not abort the flow, because the transaction already exists
+      // at the anchor and still needs polling.
+      try {
+        openInteractiveWindow(interactive.url)
+      } catch (err) {
+        setMessage(
+          err instanceof Sep24Error
+            ? err.message
+            : 'Could not open the anchor window. Use the link below.',
+        )
+      }
+
+      advance('pending_anchor')
+
+      const final = await pollUntilTerminal({
+        transferServer,
+        id: interactive.id,
+        authToken,
+        signal: controller.signal,
+        onUpdate: (tx) => {
+          onTransactionUpdate?.(tx)
+          const mapped = toComponentStatus(tx)
+          // Only push non-terminal updates here; the terminal one is set below
+          // from the resolved value, so `onStatusChange` does not fire twice
+          // for the same state.
+          if (!isTerminalStatus(tx.status)) advance(mapped)
+        },
+      })
+
+      onTransactionUpdate?.(final)
+      advance(toComponentStatus(final))
+
+      if (!isSuccessStatus(final.status)) {
+        setMessage(final.message ?? `Anchor reported: ${final.status}`)
+      }
+    } catch (err) {
+      setMessage(
+        err instanceof Sep24Error ? err.message : 'The transfer could not be started.',
+      )
+      advance('error')
+    }
+  }, [
+    advance,
+    amount,
+    anchorTransferServerUrl,
+    assetCode,
+    account,
+    authToken,
+    kind,
+    onTransactionUpdate,
+  ])
+
+  const busy = status === 'incomplete' || status === 'pending_anchor'
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border p-4">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          {kind === 'deposit' ? 'Deposit' : 'Withdraw'} {assetCode} via anchor (SEP-24)
-        </p>
-        {isTerminal && (
-          <Button variant="ghost" size="sm" onClick={reset}>
-            Reset
-          </Button>
-        )}
-      </div>
+      <p className="text-sm text-muted-foreground">
+        {kind === 'deposit' ? 'Deposit' : 'Withdraw'} {assetCode} via anchor (SEP-24)
+      </p>
 
-      {error && (
-        <p className="text-sm text-red-500" role="alert">
-          {error}
-        </p>
-      )}
-
-      {status === 'completed' && (
-        <p className="text-sm text-green-600 font-medium">
-          ✓ Transaction completed successfully
-        </p>
-      )}
-
-      {transactionId && (
-        <p className="text-xs text-muted-foreground">
-          Transaction ID: {transactionId}
-        </p>
-      )}
-
-      {interactiveUrl && status !== 'completed' && status !== 'error' && (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            if (interactiveUrl) {
-              popupRef.current = window.open(
-                interactiveUrl,
-                'sep24-interactive',
-                'width=480,height=720,scrollbars=yes,resizable=yes',
-              )
-            }
-          }}
-        >
-          Reopen interactive window
-        </Button>
-      )}
-
-      <Button onClick={startFlow} disabled={status !== 'idle'}>
-        Start {kind}
+      <Button onClick={startFlow} disabled={busy}>
+        {busy ? 'Waiting for anchor…' : `Start ${kind}`}
       </Button>
 
       {status !== 'idle' && (
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">Status:</span>
-          <span
-            className={`text-xs font-medium ${
-              status === 'completed'
-                ? 'text-green-600'
-                : status === 'error'
-                  ? 'text-red-500'
-                  : 'text-blue-500'
-            }`}
-          >
-            {status.replace(/_/g, ' ')}
-          </span>
-          {(status === 'pending_anchor' || status === 'pending_user' || status === 'pending_external') && (
-            <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-500" />
-          )}
-        </div>
+        <p className="text-xs text-muted-foreground" role="status">
+          Status: {status}
+        </p>
+      )}
+
+      {/* Shown when the popup was blocked, so the flow is still completable. */}
+      {interactiveUrl && busy && (
+        <a
+          href={interactiveUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs underline"
+        >
+          Open the anchor page
+        </a>
+      )}
+
+      {message && (
+        <p className="text-xs text-destructive" role="alert">
+          {message}
+        </p>
       )}
     </div>
   )
