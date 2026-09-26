@@ -8,3 +8,5 @@ export { FreelancerDirectoryEnhanced } from "./FreelancerDirectoryEnhanced";
 export { LoginScreen } from "./LoginScreen";
 export { ProposalModal } from "../components/ProposalModal";
 export { RegisterScreen } from "./RegisterScreen";
+export { ShareScreen } from "./ShareScreen";
+export type { ShareScreenProps } from "./ShareScreen";

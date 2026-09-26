@@ -84,10 +84,5 @@ jspm_packages/
 .env
 somzilla.md
 
-# EAS submit credentials (Issue #1390) — Play Store service account keys and
-# Apple API keys are secrets and must never be committed.
-mobile/credentials/
-mobile/*.p8
-mobile/*.p12
-mobile/google-services.json
-mobile/GoogleService-Info.plist
+# PR description files — local reference only, not for version control
+PR_*.md

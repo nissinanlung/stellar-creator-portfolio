@@ -257,3 +257,93 @@ export interface MultiSigState {
   queueApproval: (taskId: string, signerId: string) => Promise<void>;
   approveSigner: (taskId: string, signerId: string) => void;
 }
+
+// ─── Share Payload Types ───────────────────────────────────────────────────────
+
+export type ShareContentType = 'profile' | 'bounty' | 'review' | 'achievement' | 'portfolio' | 'link';
+
+export interface SharePayload {
+  type: ShareContentType;
+  title: string;
+  message?: string;
+  url: string;
+  imageUrl?: string;
+  tags?: string[];
+  metadata?: Record<string, string | number | boolean>;
+}
+
+export interface ShareOptions {
+  dismissable?: boolean;
+  showPreview?: boolean;
+  showOptions?: boolean;
+  defaultAction?: 'share' | 'copy';
+  onShare?: (contentType: ShareContentType, url: string) => void;
+  onCancel?: () => void;
+}
+
+// ─── Share Endpoint Types ──────────────────────────────────────────────────────
+
+export interface ShareEndpoint {
+  id: string;
+  name: string;
+  icon: string;
+  type: 'native' | 'web' | 'social' | 'messaging' | 'email';
+  supportedContentTypes: ShareContentType[];
+  share: (payload: SharePayload) => Promise<void>;
+  canShare: (payload: SharePayload) => boolean;
+}
+
+export interface SharedContent {
+  type: ShareContentType;
+  title: string;
+  description: string;
+  url: string;
+  imageUrl?: string;
+  tags?: string[];
+}
+
+// ─── Activity Types ────────────────────────────────────────────────────────────
+
+export type ActivityEventType =
+  | 'bounty_posted'
+  | 'bounty_applied'
+  | 'bounty_accepted'
+  | 'bounty_rejected'
+  | 'bounty_completed'
+  | 'review_received'
+  | 'review_left'
+  | 'payment_received'
+  | 'payment_sent'
+  | 'message_received'
+  | 'profile_viewed'
+  | 'match_found'
+  | 'dispute_opened'
+  | 'dispute_resolved';
+
+export interface ActivityEvent {
+  id: string;
+  type: ActivityEventType;
+  title: string;
+  subtitle?: string;
+  amount?: number;
+  relatedId?: string;
+  relatedName?: string;
+  avatarUrl?: string;
+  read: boolean;
+  createdAt: string; // ISO 8601
+}
+
+export interface ActivitySummary {
+  totalEvents: number;
+  unreadCount: number;
+  weeklyEarnings: number;
+  weeklyBounties: number;
+}
+
+export type ActivityFilterType =
+  | 'all'
+  | 'bounties'
+  | 'reviews'
+  | 'payments'
+  | 'messages'
+  | 'applications';
